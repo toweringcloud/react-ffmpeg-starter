@@ -1,13 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-
-// FFmpeg 라이브러리가 전역 window 객체에 추가하는 타입들을 정의합니다.
-// 이렇게 하면 TypeScript가 window.FFmpeg 및 window.FFmpegUtil을 인식할 수 있습니다.
-declare global {
-  interface Window {
-    FFmpeg: any;
-    FFmpegUtil: any;
-  }
-}
+import { FFmpeg } from "@ffmpeg/ffmpeg";
+import { fetchFile, toBlobURL } from "@ffmpeg/util";
 
 // UI 컴포넌트 및 아이콘
 const CameraIcon = () => (
@@ -89,6 +82,7 @@ export default function App() {
   // 상태 관리
   const [isFfmpegLoaded, setIsFfmpegLoaded] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState(0);
@@ -97,7 +91,7 @@ export default function App() {
   );
   const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState(
-    "FFmpeg 라이브러리를 기다리는 중..."
+    "FFmpeg 라이브러리 초기화 중..."
   );
 
   // Ref 관리
@@ -110,12 +104,7 @@ export default function App() {
 
   // FFmpeg 로딩 (최신 v0.12 API 적용)
   useEffect(() => {
-    const loadFFmpeg = async () => {
-      // 전역 스코프에서 FFmpeg, FFmpegUtil 객체를 가져옵니다.
-      // 이 객체들은 외부 스크립트 태그를 통해 로드됩니다.
-      const { FFmpeg } = window.FFmpeg;
-      const { toBlobURL } = window.FFmpegUtil;
-
+    const initializeFFmpeg = async () => {
       try {
         ffmpegRef.current = new FFmpeg();
         const ffmpeg = ffmpegRef.current;
@@ -129,8 +118,7 @@ export default function App() {
 
         setStatusMessage("FFmpeg 코어 로딩 중... (수십초 소요될 수 있습니다)");
 
-        // 최신 버전의 코어와 wasm 파일을 로드합니다.
-        const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+        const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
         await ffmpeg.load({
           coreURL: await toBlobURL(
             `${baseURL}/ffmpeg-core.js`,
@@ -145,52 +133,81 @@ export default function App() {
         setIsFfmpegLoaded(true);
         setStatusMessage("FFmpeg 로딩 완료. 카메라를 시작하세요.");
       } catch (error) {
-        console.error("FFmpeg 로딩 실패:", error);
-        setStatusMessage("오류: FFmpeg을 불러올 수 없습니다.");
+        console.error("FFmpeg 초기화 실패:", error);
+        setStatusMessage(
+          "오류: FFmpeg을 불러올 수 없습니다. 브라우저 콘솔과 Vite 설정을 확인해주세요."
+        );
       }
     };
 
-    // 라이브러리가 로드될 때까지 기다리는 폴링 로직
-    const pollForLibraries = () => {
-      if (window.FFmpeg && window.FFmpegUtil) {
-        loadFFmpeg();
-      } else {
-        setTimeout(pollForLibraries, 100);
-      }
-    };
-
-    pollForLibraries();
+    initializeFFmpeg();
   }, []);
+
+  // 미디어 스트림을 비디오 요소에 연결하는 useEffect
+  useEffect(() => {
+    const videoElement = videoRef.current;
+    if (videoElement && mediaStream) {
+      videoElement.srcObject = mediaStream;
+      // 메타데이터가 로드된 후 재생을 시도하여 안정성을 높입니다.
+      videoElement.onloadedmetadata = () => {
+        videoElement.play().catch((playError) => {
+          console.error("비디오 자동 재생 실패:", playError);
+          setStatusMessage(
+            "카메라는 켜졌지만, 비디오를 자동 재생할 수 없습니다."
+          );
+        });
+      };
+    } else if (videoElement) {
+      videoElement.srcObject = null;
+    }
+
+    // 컴포넌트 언마운트 또는 스트림이 변경될 때 자원을 정리합니다.
+    return () => {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [mediaStream]);
 
   // 카메라 시작/중지 함수
   const toggleCamera = async () => {
     if (isCameraOn) {
       // 카메라 끄기
-      const stream = videoRef.current?.srcObject as MediaStream;
-      stream?.getTracks().forEach((track) => track.stop());
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
-      }
+      setMediaStream(null); // useEffect 훅이 스트림을 정리하고 중지시킵니다.
       setIsCameraOn(false);
       setStatusMessage("카메라가 꺼졌습니다. 다시 시작할 수 있습니다.");
     } else {
       // 카메라 켜기
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatusMessage(
+          "오류: 이 브라우저에서는 카메라 기능을 지원하지 않습니다."
+        );
+        console.error("getUserMedia is not supported on this browser.");
+        return;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
         });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play();
-        }
+        setMediaStream(stream);
         setIsCameraOn(true);
         setStatusMessage("카메라 준비 완료. 녹화를 시작하세요.");
       } catch (error) {
         console.error("카메라 접근 실패:", error);
-        setStatusMessage(
-          "오류: 카메라에 접근할 수 없습니다. 권한을 확인해주세요."
-        );
+        let message = "오류: 카메라에 접근할 수 없습니다. 권한을 확인해주세요.";
+        if (error instanceof DOMException) {
+          if (error.name === "NotAllowedError") {
+            message =
+              "오류: 카메라 권한이 거부되었습니다. 브라우저 설정에서 권한을 허용해주세요.";
+          } else if (error.name === "NotFoundError") {
+            message = "오류: 연결된 카메라나 마이크를 찾을 수 없습니다.";
+          } else if (error.name === "NotReadableError") {
+            message = "오류: 하드웨어 문제로 카메라를 사용할 수 없습니다.";
+          }
+        }
+        setStatusMessage(message);
       }
     }
   };
@@ -245,7 +262,7 @@ export default function App() {
       return;
     }
 
-    const { fetchFile } = window.FFmpegUtil;
+    // const { fetchFile } = window.FFmpegUtil;
 
     setIsProcessing(true);
     setProcessingProgress(0);
