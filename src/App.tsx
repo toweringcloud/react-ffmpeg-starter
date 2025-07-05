@@ -143,37 +143,17 @@ export default function App() {
     initializeFFmpeg();
   }, []);
 
-  // 미디어 스트림을 비디오 요소에 연결하는 useEffect
-  useEffect(() => {
-    const videoElement = videoRef.current;
-    if (videoElement && mediaStream) {
-      videoElement.srcObject = mediaStream;
-      // 메타데이터가 로드된 후 재생을 시도하여 안정성을 높입니다.
-      videoElement.onloadedmetadata = () => {
-        videoElement.play().catch((playError) => {
-          console.error("비디오 자동 재생 실패:", playError);
-          setStatusMessage(
-            "카메라는 켜졌지만, 비디오를 자동 재생할 수 없습니다."
-          );
-        });
-      };
-    } else if (videoElement) {
-      videoElement.srcObject = null;
-    }
-
-    // 컴포넌트 언마운트 또는 스트림이 변경될 때 자원을 정리합니다.
-    return () => {
-      if (mediaStream) {
-        mediaStream.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [mediaStream]);
-
   // 카메라 시작/중지 함수
   const toggleCamera = async () => {
     if (isCameraOn) {
       // 카메라 끄기
-      setMediaStream(null); // useEffect 훅이 스트림을 정리하고 중지시킵니다.
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      setMediaStream(null);
       setIsCameraOn(false);
       setStatusMessage("카메라가 꺼졌습니다. 다시 시작할 수 있습니다.");
     } else {
@@ -182,7 +162,6 @@ export default function App() {
         setStatusMessage(
           "오류: 이 브라우저에서는 카메라 기능을 지원하지 않습니다."
         );
-        console.error("getUserMedia is not supported on this browser.");
         return;
       }
 
@@ -194,6 +173,18 @@ export default function App() {
         setMediaStream(stream);
         setIsCameraOn(true);
         setStatusMessage("카메라 준비 완료. 녹화를 시작하세요.");
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch((e) => {
+              console.error("비디오 재생 오류:", e);
+              setStatusMessage(
+                "카메라 재생에 실패했습니다. 브라우저 설정을 확인해주세요."
+              );
+            });
+          };
+        }
       } catch (error) {
         console.error("카메라 접근 실패:", error);
         let message = "오류: 카메라에 접근할 수 없습니다. 권한을 확인해주세요.";
@@ -261,9 +252,6 @@ export default function App() {
       setStatusMessage("오류: FFmpeg이 아직 로드되지 않았습니다.");
       return;
     }
-
-    // const { fetchFile } = window.FFmpegUtil;
-
     setIsProcessing(true);
     setProcessingProgress(0);
 
