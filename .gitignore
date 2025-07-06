@@ -140,3 +140,4 @@ vite.config.ts.timestamp-*
 
 # Additional
 package-lock.json
+bun.lock
