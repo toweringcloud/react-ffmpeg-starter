@@ -1,14 +1,15 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
+import tailwindcss from "@tailwindcss/vite";
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
-  // 1. FFmpeg 라이브러리를 의존성 최적화에서 제외합니다.
+  plugins: [react(), tailwindcss()],
+  // 1. exclude FFmpeg lib from dependency optimization
   optimizeDeps: {
     exclude: ["@ffmpeg/ffmpeg", "@ffmpeg/util"],
   },
-  // 2. SharedArrayBuffer 사용을 위해 서버 헤더를 설정합니다.
+  // 2. set headers for using SharedArrayBuffer
   server: {
     headers: {
       "Cross-Origin-Opener-Policy": "same-origin",
